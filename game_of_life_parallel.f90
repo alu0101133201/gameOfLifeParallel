@@ -3,18 +3,35 @@ program game_of_life
     implicit none
     integer :: height, width
     integer :: max_gen, gen
-    integer :: n_rows, n_cols
-    integer :: my_rank, n_ranks
+    integer :: n_rows, n_cols, row, col
+    integer :: my_rank, n_ranks, root, north_rank, south_rank, east_rank, west_rank
     logical, dimension(:, :), pointer :: old_world, new_world, tmp_world
 
     call MPI_Init()
     call MPI_Comm_rank( MPI_COMM_WORLD, my_rank)
     call MPI_Comm_size( MPI_COMM_WORLD, n_ranks)
-
-    if (my_rank == 0) then
+    
+    root = 0
+    if (my_rank == root) then
         read *, height, width, max_gen, n_rows, n_cols
-        print *, height, width, max_gen, n_rows, n_cols
+
+        if ((n_rows * n_cols) /= n_ranks) then
+            print "(a)", "Incorrect number of processes"
+            call MPI_Abort( MPI_COMM_WORLD, MPI_ERR_TOPOLOGY )
+        end if
     end if
+    
+    call MPI_Bcast(n_rows, 1, MPI_INTEGER, root, MPI_COMM_WORLD)
+    call MPI_Bcast(n_cols, 1, MPI_INTEGER, root, MPI_COMM_WORLD)
+
+    call get_coords( my_rank, n_rows, n_cols, row, col)
+    north_rank = get_rank(row - 1, col, n_rows, n_cols)
+    south_rank = get_rank(row + 1, col, n_rows, n_cols)
+    west_rank  = get_rank(row, col - 1, n_rows, n_cols)
+    east_rank  = get_rank(row, col + 1, n_rows, n_cols)
+
+
+
 
     !allocate(old_world(0:height + 1, 0:width + 1))
     !allocate(new_world(0:height + 1, 0:width + 1))
@@ -128,5 +145,48 @@ contains
         ! Clear the terminal screen using console escape code ^[2J.
         print "(2a)", achar( 27 ), '[2J'
     end subroutine wait_cls
+
+    ! Parallel subroutines ----------------------------------------------------
+    subroutine get_coords( rank, n_rows, n_cols, row, col )
+        integer, intent(in)    :: rank, n_rows, n_cols
+        integer, intent(inout) :: row, col
+
+        row = modulo(rank, n_rows)
+        col = (rank - row) / n_rows
+        if (0 <= col .and. col < n_cols) then
+            return
+        else
+            print "(a, 2(i0, a))", "get_coords: rank ", rank, &
+                " is outside the column range [0, ", n_cols, ")."
+            call MPI_Abort( MPI_COMM_WORLD, MPI_ERR_TOPOLOGY )
+        end if
+    end subroutine get_coords
+
+    integer function get_rank( row, col, n_rows, n_cols )
+        integer, intent(in) ::  row, col, n_rows, n_cols
+        integer :: aux_row, aux_col
+        aux_row = row
+        aux_col = col
+
+        if (      0 <= col .and. col < n_cols &
+            .and. 0 <= row .and. row < n_rows) then
+                get_rank = row + col * n_rows
+        else ! case when we apply toroidal topology
+
+            if (row < 0) then
+                aux_row = n_rows - 1
+            else if (row >= n_rows) then 
+                aux_row = 0
+            end if
+
+            if (col < 0) then
+                aux_col = n_cols - 1
+            else if (col >= n_cols) then 
+                aux_col = 0
+            end if
+
+            get_rank = aux_row + aux_col * n_rows
+        end if
+    end function get_rank
 
 end program game_of_life
