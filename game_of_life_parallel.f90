@@ -1,28 +1,40 @@
 program game_of_life
+    use mpi_f08
     implicit none
     integer :: height, width
     integer :: max_gen, gen
+    integer :: n_rows, n_cols
+    integer :: my_rank, n_ranks
     logical, dimension(:, :), pointer :: old_world, new_world, tmp_world
-        
-    read *, height, width, max_gen !, n_rows, n_cols
-    allocate(old_world(0:height + 1, 0:width + 1))
-    allocate(new_world(0:height + 1, 0:width + 1))
-    call read_map( old_world, height, width )
-    call update_borders( old_world, height, width )
 
-    do gen = 1, max_gen
-        print "(a, i0)", "Generation ", gen
-        call print_map( old_world, height, width )
-        call next_gen( old_world, new_world, height, width )
-        call update_borders( new_world, height, width )
-        call wait_cls( 100 )
-        if (world_is_still( old_world, new_world )) exit
-        ! Swap maps
-        tmp_world => old_world;  old_world => new_world;  new_world => tmp_world
-    end do
+    call MPI_Init()
+    call MPI_Comm_rank( MPI_COMM_WORLD, my_rank)
+    call MPI_Comm_size( MPI_COMM_WORLD, n_ranks)
 
-    if (associated( old_world )) deallocate(old_world)
-    if (associated( new_world )) deallocate(new_world)
+    if (my_rank == 0) then
+        read *, height, width, max_gen, n_rows, n_cols
+        print *, height, width, max_gen, n_rows, n_cols
+    end if
+
+    !allocate(old_world(0:height + 1, 0:width + 1))
+    !allocate(new_world(0:height + 1, 0:width + 1))
+    !call read_map( old_world, height, width )
+    !call update_borders( old_world, height, width )
+
+    !do gen = 1, max_gen
+    !    print "(a, i0)", "Generation ", gen
+    !    call print_map( old_world, height, width )
+    !    call next_gen( old_world, new_world, height, width )
+    !    call update_borders( new_world, height, width )
+    !    call wait_cls( 100 )
+    !    if (world_is_still( old_world, new_world )) exit
+    !    ! Swap maps
+    !    tmp_world => old_world;  old_world => new_world;  new_world => tmp_world
+    !end do
+
+    !if (associated( old_world )) deallocate(old_world)
+    !if (associated( new_world )) deallocate(new_world)
+    call MPI_Finalize()
 
 contains
 
