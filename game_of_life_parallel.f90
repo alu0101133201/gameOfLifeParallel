@@ -5,7 +5,9 @@ program game_of_life
     integer :: max_gen, gen
     integer :: n_rows, n_cols, row, col
     integer :: my_rank, n_ranks, root, north_rank, south_rank, east_rank, west_rank
+    integer :: ib, ie, jb, je
     logical, dimension(:, :), pointer :: old_world, new_world, tmp_world
+    type(MPI_Datatype) :: a_row, a_col
 
     call MPI_Init()
     call MPI_Comm_rank( MPI_COMM_WORLD, my_rank)
@@ -23,6 +25,8 @@ program game_of_life
     
     call MPI_Bcast(n_rows, 1, MPI_INTEGER, root, MPI_COMM_WORLD)
     call MPI_Bcast(n_cols, 1, MPI_INTEGER, root, MPI_COMM_WORLD)
+    call MPI_Bcast(height, 1, MPI_INTEGER, root, MPI_COMM_WORLD)
+    call MPI_Bcast(width, 1, MPI_INTEGER, root, MPI_COMM_WORLD)
 
     call get_coords( my_rank, n_rows, n_cols, row, col)
     north_rank = get_rank(row - 1, col, n_rows, n_cols)
@@ -31,10 +35,23 @@ program game_of_life
     east_rank  = get_rank(row, col + 1, n_rows, n_cols)
 
 
+    call partition( row, n_rows, height, ib, ie )
+    call partition( col, n_cols, width, jb, je )
 
+    allocate(old_world(ib - 1 : ib + 1, jb - 1 : jb + 1))
+    allocate(new_world(ib - 1 : ib + 1, jb - 1 : jb + 1))
 
-    !allocate(old_world(0:height + 1, 0:width + 1))
-    !allocate(new_world(0:height + 1, 0:width + 1))
+    ! Definitions of MPI types
+    call MPI_Type_contiguous( ie - ib + 1, MPI_REAL, a_col)
+    call MPI_Type_commit( a_col )
+
+    block
+        type(MPI_Datatype) :: a_tmp_row
+
+        call MPI_Type_vector(je - jb + 3, )
+        ! ¿Qué es el segundo argumento de mpi_type_vector?
+    end block
+
     !call read_map( old_world, height, width )
     !call update_borders( old_world, height, width )
 
@@ -49,8 +66,8 @@ program game_of_life
     !    tmp_world => old_world;  old_world => new_world;  new_world => tmp_world
     !end do
 
-    !if (associated( old_world )) deallocate(old_world)
-    !if (associated( new_world )) deallocate(new_world)
+    if (associated( old_world )) deallocate(old_world)
+    if (associated( new_world )) deallocate(new_world)
     call MPI_Finalize()
 
 contains
@@ -188,5 +205,16 @@ contains
             get_rank = aux_row + aux_col * n_rows
         end if
     end function get_rank
+
+    subroutine partition (id, n_ids, size, b, e)
+        integer, intent(in)    :: id, n_ids, size
+        integer, intent(inout) :: b, e
+        integer :: remainder, quotient
+
+        remainder = modulo( size, n_ids )
+        quotient  = (size - remainder) / n_ids
+        b = 1 + quotient * (id    ) + min( remainder, id     )
+        e =     quotient * (id + 1) + min( remainder, id + 1 )
+    end subroutine partition
 
 end program game_of_life
