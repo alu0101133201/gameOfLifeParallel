@@ -47,12 +47,15 @@ program game_of_life
 
     block
         type(MPI_Datatype) :: a_tmp_row
+        integer(kind=MPI_ADDRESS_KIND) :: lb, real_extent
 
-        call MPI_Type_vector(je - jb + 3, )
-        ! ¿Qué es el segundo argumento de mpi_type_vector?
+        call MPI_Type_vector(je - jb + 3, 1, ie - ib + 3, MPI_REAL, a_tmp_row)
+        call MPI_Type_get_extent( MPI_REAL, lb, real_extent )
+        call MPI_Type_create_resized( a_tmp_row, lb, real_extent, a_row )
+        call MPI_Type_commit( a_row )
     end block
 
-    !call read_map( old_world, height, width )
+    call read_map( old_world, height, width )
     !call update_borders( old_world, height, width )
 
     !do gen = 1, max_gen
@@ -68,6 +71,9 @@ program game_of_life
 
     if (associated( old_world )) deallocate(old_world)
     if (associated( new_world )) deallocate(new_world)
+
+    call MPI_Type_free( a_col )
+    call MPI_Type_free( a_row)
     call MPI_Finalize()
 
 contains
@@ -95,22 +101,27 @@ contains
         integer, intent(in) :: h, w
         character(len=:), allocatable :: line
         integer :: i, j
-        
-        allocate(character(len=w) :: line)
-        do i = 1, h
-            read *, line
-            do j = 1, w
-                select case (line(j:j))
-                case ('X')
-                    map(i, j) = .true.
-                case ('.')
-                    map(i, j) = .false.
-                case default
-                    stop "read_map: wrong input character `" // line(j:j) // "`"
-                end select
-            end do
-        end do
-        if (allocated( line )) deallocate(line)
+       
+        if (my_rank == root) then
+            print *, "Soy root y estoy leyendo"
+            !block
+            !    allocate(character(len=w) :: line)
+            !    do i = 1, h
+            !        read *, line
+            !        do j = 1, w
+            !            select case (line(j:j))
+            !            case ('X')
+            !                map(i, j) = .true.
+            !            case ('.')
+            !                map(i, j) = .false.
+            !            case default
+            !                stop "read_map: wrong input character `" // line(j:j) // "`"
+            !            end select
+            !        end do
+            !    end do
+            !    if (allocated( line )) deallocate(line)
+            !end block
+        end if
     end subroutine read_map
 
     subroutine print_map( map, h, w )
