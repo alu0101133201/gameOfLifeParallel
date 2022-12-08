@@ -8,6 +8,7 @@ program game_of_life
     integer :: ib, ie, jb, je
     logical, dimension(:, :), pointer :: old_world, new_world, tmp_world
     type(MPI_Datatype) :: a_row, a_col
+    type(MPI_Status)   :: status
 
     call MPI_Init()
     call MPI_Comm_rank( MPI_COMM_WORLD, my_rank)
@@ -37,25 +38,27 @@ program game_of_life
 
     call partition( row, n_rows, height, ib, ie )
     call partition( col, n_cols, width, jb, je )
+    !print *, "Myrank: ", my_rank, "Le he pasado : ", row, col, " obtengo: ", ib, ie
+    !print *, "Myrank: ", my_rank, "ib, ie: ", ib ,ie
 
-    allocate(old_world(ib - 1 : ib + 1, jb - 1 : jb + 1))
-    allocate(new_world(ib - 1 : ib + 1, jb - 1 : jb + 1))
+    allocate(old_world(ib - 1 : ie + 1, jb - 1 : je + 1))
+    allocate(new_world(ib - 1 : ie + 1, jb - 1 : je + 1))
 
     ! Definitions of MPI types
-    call MPI_Type_contiguous( ie - ib + 1, MPI_REAL, a_col)
-    call MPI_Type_commit( a_col )
-
     block
         type(MPI_Datatype) :: a_tmp_row
         integer(kind=MPI_ADDRESS_KIND) :: lb, real_extent
 
-        call MPI_Type_vector(je - jb + 3, 1, ie - ib + 3, MPI_REAL, a_tmp_row)
-        call MPI_Type_get_extent( MPI_REAL, lb, real_extent )
+        call MPI_Type_vector(je - jb + 1, 1, ie - ib + 3, MPI_LOGICAL, a_tmp_row)
+        call MPI_Type_get_extent( MPI_LOGICAL, lb, real_extent )
         call MPI_Type_create_resized( a_tmp_row, lb, real_extent, a_row )
         call MPI_Type_commit( a_row )
     end block
 
     call read_map( old_world, height, width )
+    !call barrier_print_map(old_world, MPI_COMM_WORLD)
+    call print_map(old_world, MPI_COMM_WORLD, height, width)
+
     !call update_borders( old_world, height, width )
 
     !do gen = 1, max_gen
@@ -72,7 +75,6 @@ program game_of_life
     if (associated( old_world )) deallocate(old_world)
     if (associated( new_world )) deallocate(new_world)
 
-    call MPI_Type_free( a_col )
     call MPI_Type_free( a_row)
     call MPI_Finalize()
 
@@ -100,46 +102,124 @@ contains
         logical, dimension(:, :), pointer, intent(inout) :: map
         integer, intent(in) :: h, w
         character(len=:), allocatable :: line
-        integer :: i, j
+        logical,          allocatable :: temp(:)
+        integer :: i, j, rb, re, cb, ce
        
         if (my_rank == root) then
-            print *, "Soy root y estoy leyendo"
-            !block
-            !    allocate(character(len=w) :: line)
-            !    do i = 1, h
-            !        read *, line
-            !        do j = 1, w
-            !            select case (line(j:j))
-            !            case ('X')
-            !                map(i, j) = .true.
-            !            case ('.')
-            !                map(i, j) = .false.
-            !            case default
-            !                stop "read_map: wrong input character `" // line(j:j) // "`"
-            !            end select
-            !        end do
-            !    end do
-            !    if (allocated( line )) deallocate(line)
-            !end block
+            block
+                integer :: current_row
+                integer :: current_col
+                integer :: dst
+                allocate(character(len=w) :: line)
+                do current_row = 0, n_rows - 1
+                    call partition(current_row, n_rows, h, rb, re)
+                    do i = rb, re
+                        read *, line
+                        do current_col = 0, n_cols - 1
+                            call partition(current_col, n_cols, w, cb, ce)
+                            dst = get_rank(current_row, current_col, n_rows, n_cols)
+                            allocate(temp(ce - cb + 1))
+                            do j = cb, ce 
+                                select case (line(j:j))
+                                case ('X')
+                                    temp(j - cb + 1) = .True.
+                                case ('.')
+                                    temp(j - cb + 1) = .False.
+                                case default
+                                    stop "read_map: wrong input character `" // line(j:j) // "`"
+                                end select
+                            end do
+                            if (dst == root) then
+                                map(i, cb : ce)  = temp
+                            else
+                                call MPI_Send( temp, ce - cb + 1, MPI_LOGICAL, dst, 0,  MPI_COMM_WORLD )
+                            end if
+                            if (allocated( temp )) deallocate(temp)
+                        end do
+                    end do
+                end do
+                if (allocated( line )) deallocate(line)
+            end block
+        else
+            do i = ib, ie
+                call MPI_Recv(map(i,jb), 1, a_row, root, 0, MPI_COMM_WORLD, status)
+            end do
         end if
     end subroutine read_map
 
-    subroutine print_map( map, h, w )
+    subroutine barrier_print_map (map, comm)
         logical, dimension(:, :), pointer, intent(in) :: map
-        integer, intent(in) :: h, w
-        character(len=:), allocatable :: line
-        integer :: i, j
+        type(MPI_Comm)                                :: comm
 
-        allocate(character(len=w) :: line)
-        do i = 1, h
-            do j = 1, w
-                line(j:j) = merge( 'X', '.', map(i, j) )
-            end do
-            print "(a)", line
-        end do
+        character(len=:), allocatable :: line
+        integer :: rank
+        integer :: i, j
+        
         print *
-        if (allocated( line )) deallocate(line)
-    end subroutine print_map
+        do rank = 0, n_ranks
+            if (rank == my_rank) then
+                print *, "Process: ", my_rank
+                allocate(character(len=je-jb+1) :: line)
+                do i = ib, ie
+                    do j = jb, je 
+                        line(j-jb+1:j-jb+1) = merge ( 'X', '.', map(i,j))
+                    end do
+                    print *, line
+                end do
+                if (allocated( line )) deallocate(line)
+            end if
+            call MPI_Barrier( comm ) 
+        end do
+    end subroutine
+
+    subroutine print_map(map, comm, h, w)
+        logical, dimension(:, :), pointer, intent(in) :: map
+        type(MPI_Comm)                                :: comm
+        integer, intent(in)                           :: h, w
+
+        character(len=:), allocatable :: line
+        logical,          allocatable :: temp(:)
+        integer :: i, j, rb, re, cb, ce
+
+        if (my_rank == root) then
+            block
+                integer :: current_row
+                integer :: current_col
+                integer :: dst
+                allocate(character(len=w) :: line)
+
+                do current_row = 0, n_rows - 1
+                    call partition(current_row, n_rows, h, rb, re)
+                    do i = rb, re
+                        do current_col = 0, n_cols - 1
+                            call partition(current_col, n_cols, w, cb, ce)
+                            allocate(temp(ce - cb + 1))
+                            dst = get_rank(current_row, current_col, n_rows, n_cols)
+                            if (dst == root) then
+                                do j = cb, ce 
+                                    line(j:j) = merge ( 'X', '.', map(i,j))
+                                end do
+                            else 
+                                call MPI_Recv(temp, ce-cb+1, MPI_LOGICAL, dst, 0, comm, status)
+                                do j = cb, ce 
+                                    line(j:j) = merge ( 'X', '.', temp(j-cb+1))
+                                end do
+                            end if
+                            if (allocated( temp )) deallocate(temp)
+                        end do
+                        print *, line
+                    end do
+                end do
+                if (allocated( line )) deallocate(line)
+            end block
+       else
+           do i = ib, ie
+               call MPI_Send( map(i, jb), 1, a_row, root, 0, comm)
+           end do
+       end if
+        
+
+    end subroutine
 
     subroutine next_gen( old_map, new_map, h, w )
         logical, dimension(:, :), pointer, intent(inout) :: old_map, new_map
@@ -200,7 +280,6 @@ contains
             .and. 0 <= row .and. row < n_rows) then
                 get_rank = row + col * n_rows
         else ! case when we apply toroidal topology
-
             if (row < 0) then
                 aux_row = n_rows - 1
             else if (row >= n_rows) then 
