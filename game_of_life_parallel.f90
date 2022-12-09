@@ -7,6 +7,7 @@ program game_of_life
     integer :: my_rank, n_ranks, root, north_rank, south_rank, east_rank, west_rank
     integer :: ib, ie, jb, je
     logical, dimension(:, :), pointer :: old_world, new_world, tmp_world
+    logical :: ghost_flag
     type(MPI_Datatype) :: a_row, a_col
     type(MPI_Status)   :: status
 
@@ -43,6 +44,8 @@ program game_of_life
     allocate(new_world(ib - 1 : ie + 1, jb - 1 : je + 1))
 
     ! Definitions of MPI types
+    call MPI_Type_contiguous(ie - ib + 3, MPI_LOGICAL, a_col) ! column with ghost layers
+    CALL MPI_Type_commit(a_col)
     block
         type(MPI_Datatype) :: a_tmp_row
         integer(kind=MPI_ADDRESS_KIND) :: lb, real_extent
@@ -54,11 +57,12 @@ program game_of_life
     end block
 
     call read_map( old_world, height, width )
-    !call barrier_print_map(old_world, MPI_COMM_WORLD)
-    call barrier_print_ghost_map(old_world, MPI_COMM_WORLD)
+    ghost_flag = .True.
+    !call barrier_print_map(old_world, MPI_COMM_WORLD, ghost_flag)
     !call print_map(old_world, MPI_COMM_WORLD, height, width)
-
-    !call update_borders( old_world, height, width )
+    call update_borders( old_world )
+    print *, ""
+    call barrier_print_map(old_world, MPI_COMM_WORLD, ghost_flag)
 
     !do gen = 1, max_gen
     !    print "(a, i0)", "Generation ", gen
@@ -74,7 +78,8 @@ program game_of_life
     if (associated( old_world )) deallocate(old_world)
     if (associated( new_world )) deallocate(new_world)
 
-    call MPI_Type_free( a_row)
+    call MPI_Type_free( a_row )
+    call MPI_Type_free( a_col )
     call MPI_Finalize()
 
 contains
@@ -85,16 +90,22 @@ contains
         world_is_still = all( old_map .eqv. new_map )
     end function world_is_still
 
-    subroutine update_borders( map, h, w )
+    subroutine update_borders( map )
         logical, dimension(:, :), pointer, intent(inout) :: map
-        integer, intent(in) :: h, w
 
-        ! Inner rows
-        map(0,     1:w) = map(h, 1:w)
-        map(h + 1, 1:w) = map(1, 1:w)
-        ! Full columns
-        map(0:h + 1, 0    ) = map(0:h + 1, w)
-        map(0:h + 1, w + 1) = map(0:h + 1, 1)
+        ! synchronize rows
+        call MPI_Sendrecv( map(ib,jb),     1, a_row, north_rank, 1, &
+                           map(ie + 1,jb), 1, a_row, south_rank, 1, MPI_COMM_WORLD, status)
+        call MPI_Sendrecv( map(ie,jb),     1, a_row, south_rank, 2, &
+                           map(ib-1, jb),   1, a_row, north_rank, 2, MPI_COMM_WORLD, status)
+
+        ! syncrhonize cols (big cols)
+        call MPI_Sendrecv( map(ib - 1, jb), 1, a_col, west_rank, 3, &
+                           map(ib - 1, je + 1), 1, a_col, east_rank, 3, MPI_COMM_WORLD, status)
+        call MPI_Sendrecv( map(ib - 1, je), 1, a_col, east_rank, 3, &
+                           map(ib - 1, jb - 1), 1, a_col, west_rank, 3, MPI_COMM_WORLD, status)
+
+
     end subroutine update_borders
 
     subroutine read_map( map, h, w )
@@ -146,47 +157,27 @@ contains
         end if
     end subroutine read_map
 
-    subroutine barrier_print_ghost_map (map, comm)
+    subroutine barrier_print_map (map, comm, ghost_flag)
         logical, dimension(:, :), pointer, intent(in) :: map
         type(MPI_Comm)                                :: comm
+        logical,                           intent(in) :: ghost_flag
 
         character(len=:), allocatable :: line
         integer :: rank
         integer :: i, j
+        integer :: ghost_index
         
-        print *
+        ! ghost_index controls if ghost layers are printed or not   
+        ghost_index = merge ( 1, 0, ghost_flag)
+
+        print *, ""
         do rank = 0, n_ranks
             if (rank == my_rank) then
                 print *, "Process: ", my_rank
-                allocate(character(len=je-jb+3) :: line)
-                do i = ib - 1, ie + 1
-                    do j = jb - 1, je + 1
-                        line(j-jb+2:j-jb+2) = merge ( 'X', '.', map(i,j))
-                    end do
-                    print *, line
-                end do
-                if (allocated( line )) deallocate(line)
-            end if
-            call MPI_Barrier( comm ) 
-        end do
-    end subroutine
-
-    subroutine barrier_print_map (map, comm)
-        logical, dimension(:, :), pointer, intent(in) :: map
-        type(MPI_Comm)                                :: comm
-
-        character(len=:), allocatable :: line
-        integer :: rank
-        integer :: i, j
-        
-        print *
-        do rank = 0, n_ranks
-            if (rank == my_rank) then
-                print *, "Process: ", my_rank
-                allocate(character(len=je-jb+1) :: line)
-                do i = ib, ie
-                    do j = jb, je 
-                        line(j-jb+1:j-jb+1) = merge ( 'X', '.', map(i,j))
+                allocate(character(len=je-jb+1 + (2*ghost_index)) :: line)
+                do i = ib - ghost_index, ie + ghost_index
+                    do j = jb - ghost_index, je + ghost_index
+                        line(j-jb+1+ghost_index:j-jb+1+ghost_index) = merge ( 'X', '.', map(i,j))
                     end do
                     print *, line
                 end do
