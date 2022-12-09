@@ -38,8 +38,6 @@ program game_of_life
 
     call partition( row, n_rows, height, ib, ie )
     call partition( col, n_cols, width, jb, je )
-    !print *, "Myrank: ", my_rank, "Le he pasado : ", row, col, " obtengo: ", ib, ie
-    !print *, "Myrank: ", my_rank, "ib, ie: ", ib ,ie
 
     allocate(old_world(ib - 1 : ie + 1, jb - 1 : je + 1))
     allocate(new_world(ib - 1 : ie + 1, jb - 1 : je + 1))
@@ -57,7 +55,8 @@ program game_of_life
 
     call read_map( old_world, height, width )
     !call barrier_print_map(old_world, MPI_COMM_WORLD)
-    call print_map(old_world, MPI_COMM_WORLD, height, width)
+    call barrier_print_ghost_map(old_world, MPI_COMM_WORLD)
+    !call print_map(old_world, MPI_COMM_WORLD, height, width)
 
     !call update_borders( old_world, height, width )
 
@@ -146,6 +145,31 @@ contains
             end do
         end if
     end subroutine read_map
+
+    subroutine barrier_print_ghost_map (map, comm)
+        logical, dimension(:, :), pointer, intent(in) :: map
+        type(MPI_Comm)                                :: comm
+
+        character(len=:), allocatable :: line
+        integer :: rank
+        integer :: i, j
+        
+        print *
+        do rank = 0, n_ranks
+            if (rank == my_rank) then
+                print *, "Process: ", my_rank
+                allocate(character(len=je-jb+3) :: line)
+                do i = ib - 1, ie + 1
+                    do j = jb - 1, je + 1
+                        line(j-jb+2:j-jb+2) = merge ( 'X', '.', map(i,j))
+                    end do
+                    print *, line
+                end do
+                if (allocated( line )) deallocate(line)
+            end if
+            call MPI_Barrier( comm ) 
+        end do
+    end subroutine
 
     subroutine barrier_print_map (map, comm)
         logical, dimension(:, :), pointer, intent(in) :: map
