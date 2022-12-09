@@ -7,7 +7,7 @@ program game_of_life
     integer :: my_rank, n_ranks, root, north_rank, south_rank, east_rank, west_rank
     integer :: ib, ie, jb, je
     logical, dimension(:, :), pointer :: old_world, new_world, tmp_world
-    logical :: ghost_flag
+    logical :: ghost_flag, root_world_still_flag
     type(MPI_Datatype) :: a_row, a_col
     type(MPI_Status)   :: status
 
@@ -29,6 +29,7 @@ program game_of_life
     call MPI_Bcast(n_cols, 1, MPI_INTEGER, root, MPI_COMM_WORLD)
     call MPI_Bcast(height, 1, MPI_INTEGER, root, MPI_COMM_WORLD)
     call MPI_Bcast(width, 1, MPI_INTEGER, root, MPI_COMM_WORLD)
+    call MPI_Bcast(max_gen, 1, MPI_INTEGER, root, MPI_COMM_WORLD)
 
     call get_coords( my_rank, n_rows, n_cols, row, col)
     north_rank = get_rank(row - 1, col, n_rows, n_cols)
@@ -58,22 +59,21 @@ program game_of_life
 
     call read_map( old_world, height, width )
     ghost_flag = .True.
-    !call barrier_print_map(old_world, MPI_COMM_WORLD, ghost_flag)
-    !call print_map(old_world, MPI_COMM_WORLD, height, width)
     call update_borders( old_world )
-    print *, ""
-    call barrier_print_map(old_world, MPI_COMM_WORLD, ghost_flag)
 
-    !do gen = 1, max_gen
-    !    print "(a, i0)", "Generation ", gen
-    !    call print_map( old_world, height, width )
-    !    call next_gen( old_world, new_world, height, width )
-    !    call update_borders( new_world, height, width )
-    !    call wait_cls( 100 )
-    !    if (world_is_still( old_world, new_world )) exit
-    !    ! Swap maps
-    !    tmp_world => old_world;  old_world => new_world;  new_world => tmp_world
-    !end do
+    do gen = 1, max_gen
+        if (my_rank == root) print "(a, i0)", "Generation ", gen
+        call print_map( old_world, height, width )
+        !if (my_rank == root) call wait_cls( 100 )
+        call next_gen( old_world, new_world )
+        call update_borders( new_world )
+        root_world_still_flag = world_is_still( old_world, new_world )
+        if (my_rank == root) then
+            if (root_world_still_flag) call MPI_Abort( MPI_COMM_WORLD, MPI_SUCCESS)
+        end if 
+        ! Swap maps
+        tmp_world => old_world;  old_world => new_world;  new_world => tmp_world
+    end do
 
     if (associated( old_world )) deallocate(old_world)
     if (associated( new_world )) deallocate(new_world)
@@ -84,10 +84,17 @@ program game_of_life
 
 contains
 
-    logical function world_is_still( old_map, new_map )
+    function world_is_still( old_map, new_map ) result(world_still)
         logical, dimension(:, :), pointer, intent(in) :: old_map, new_map
+        logical :: world_still
 
-        world_is_still = all( old_map .eqv. new_map )
+        logical, dimension(n_ranks)                   :: all_is_still
+
+        world_still = all( old_map .eqv. new_map )
+        call MPI_Gather(world_still, 1, MPI_LOGICAL, &
+                        all_is_still,   1, MPI_LOGICAL, root, MPI_COMM_WORLD)
+        if (my_rank == root) world_still = all ( all_is_still .eqv. .True.)
+
     end function world_is_still
 
     subroutine update_borders( map )
@@ -157,9 +164,8 @@ contains
         end if
     end subroutine read_map
 
-    subroutine barrier_print_map (map, comm, ghost_flag)
+    subroutine barrier_print_map (map, ghost_flag)
         logical, dimension(:, :), pointer, intent(in) :: map
-        type(MPI_Comm)                                :: comm
         logical,                           intent(in) :: ghost_flag
 
         character(len=:), allocatable :: line
@@ -170,7 +176,6 @@ contains
         ! ghost_index controls if ghost layers are printed or not   
         ghost_index = merge ( 1, 0, ghost_flag)
 
-        print *, ""
         do rank = 0, n_ranks
             if (rank == my_rank) then
                 print *, "Process: ", my_rank
@@ -179,17 +184,17 @@ contains
                     do j = jb - ghost_index, je + ghost_index
                         line(j-jb+1+ghost_index:j-jb+1+ghost_index) = merge ( 'X', '.', map(i,j))
                     end do
-                    print *, line
+                    print "(a)", line
                 end do
+                print *
                 if (allocated( line )) deallocate(line)
             end if
-            call MPI_Barrier( comm ) 
+            call MPI_Barrier( MPI_COMM_WORLD ) 
         end do
     end subroutine
 
-    subroutine print_map(map, comm, h, w)
+    subroutine print_map(map, h, w)
         logical, dimension(:, :), pointer, intent(in) :: map
-        type(MPI_Comm)                                :: comm
         integer, intent(in)                           :: h, w
 
         character(len=:), allocatable :: line
@@ -215,35 +220,35 @@ contains
                                     line(j:j) = merge ( 'X', '.', map(i,j))
                                 end do
                             else 
-                                call MPI_Recv(temp, ce-cb+1, MPI_LOGICAL, dst, 0, comm, status)
+                                call MPI_Recv(temp, ce-cb+1, MPI_LOGICAL, dst, 0, MPI_COMM_WORLD, status)
                                 do j = cb, ce 
                                     line(j:j) = merge ( 'X', '.', temp(j-cb+1))
                                 end do
                             end if
                             if (allocated( temp )) deallocate(temp)
                         end do
-                        print *, line
+                        print "(a)", line
                     end do
                 end do
+                print *
                 if (allocated( line )) deallocate(line)
             end block
        else
            do i = ib, ie
-               call MPI_Send( map(i, jb), 1, a_row, root, 0, comm)
+               call MPI_Send( map(i, jb), 1, a_row, root, 0, MPI_COMM_WORLD)
            end do
        end if
         
 
     end subroutine
 
-    subroutine next_gen( old_map, new_map, h, w )
+    subroutine next_gen( old_map, new_map )
         logical, dimension(:, :), pointer, intent(inout) :: old_map, new_map
-        integer, intent(in) :: h, w
         integer :: i, j
         integer :: c ! the number of live neighbors
 
-        do j = 1, w
-            do i = 1, h
+        do j = jb, je
+            do i = ib, ie
                 c = count( old_map(i - 1:i + 1, j - 1:j + 1) )
                 if (old_map(i, j)) then ! cell is live
                     new_map(i, j) = merge( .true., .false., 3 <= c .and. c <= 4 )
