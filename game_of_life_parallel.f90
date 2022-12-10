@@ -64,13 +64,12 @@ program game_of_life
     do gen = 1, max_gen
         if (my_rank == root) print "(a, i0)", "Generation ", gen
         call print_map( old_world, height, width )
-        !if (my_rank == root) call wait_cls( 100 )
         call next_gen( old_world, new_world )
         call update_borders( new_world )
         root_world_still_flag = world_is_still( old_world, new_world )
-        if (my_rank == root) then
-            if (root_world_still_flag) call MPI_Abort( MPI_COMM_WORLD, MPI_SUCCESS)
-        end if 
+        call MPI_Bcast(root_world_still_flag, 1, MPI_LOGICAL, root, MPI_COMM_WORLD)
+        if (root_world_still_flag) exit
+        if (my_rank == root) call wait_cls( 100 )
         ! Swap maps
         tmp_world => old_world;  old_world => new_world;  new_world => tmp_world
     end do
