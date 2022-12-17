@@ -69,7 +69,7 @@ program game_of_life
         root_world_still_flag = world_is_still( old_world, new_world )
         call MPI_Bcast(root_world_still_flag, 1, MPI_LOGICAL, root, MPI_COMM_WORLD)
         if (root_world_still_flag) exit
-        if (my_rank == root) call wait_cls( 100 )
+        !if (my_rank == root) call wait_cls( 100 )
         ! Swap maps
         tmp_world => old_world;  old_world => new_world;  new_world => tmp_world
     end do
